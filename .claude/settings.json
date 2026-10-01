@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(py:*)",
+      "Bash(pip:*)",
+      "Bash(pytest:*)",
+      "Bash(.venv/Scripts/python.exe:*)",
+      "PowerShell(python:*)",
+      "PowerShell(py:*)",
+      "PowerShell(pip:*)",
+      "PowerShell(pytest:*)",
+      "PowerShell(.venv\\Scripts\\python.exe:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Edit(./.env)",
+      "Write(./.env)"
+    ]
+  }
+}

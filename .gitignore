@@ -1,0 +1,22 @@
+# 비밀값
+.env
+.env.*
+!.env.example
+
+# 수집 데이터
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Claude Code 개인 설정
+.claude/settings.local.json
+
+# OS / 편집기
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
