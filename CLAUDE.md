@@ -15,6 +15,7 @@
 - 상세 명세: [docs/api_spec.md](docs/api_spec.md) — API 관련 작업 전에 반드시 읽을 것
 - 노선번호↔ID 매핑용 버스노선 API: [docs/api_bus_route.md](docs/api_bus_route.md)
 - 정류장 이름↔ID 매핑용 버스정류장 API: [docs/api_bus_stop.md](docs/api_bus_stop.md)
+- 공휴일용 특일정보 API(한국천문연구원): [docs/api_holiday.md](docs/api_holiday.md) — 주소·키 이름(`ServiceKey`)·응답 형식이 1613000과 다름
 - ⚠️ 세 API의 `sgg_cd` 요구사항과 지역코드(51/42)가 서로 다르다 → docs/api_bus_stop.md 3장 비교표 참고
 - 핵심만:
   - `GET https://apis.data.go.kr/1613000/RouteCongestionLevel/getRouteCongestionLevel`
@@ -26,11 +27,20 @@
   - 실제 응답 필드명은 **소문자**(`opr_ymd`, `rte_id`, `tzon`, `cgst`) — 가이드의 대문자 표기와 다름
   - 데이터 경로: `Response.body.items.item[]`, 전체 건수 `Response.body.totalCount`
   - **오류도 HTTP 200**으로 옴(`{"Error": {"code", "message"}}`) → 본문으로 성공 판단
+  - `cgst`(혼잡도) = **45명 기준 재차율(%)**로 추정 (`round(재차인원/45×100)`, 실측 근거는 docs/api_spec.md 4.4). 공식 산식 아님 — 발표 시 "추정"으로 표기
 
 ## 기술 스택 / 환경
 - Python 3.12, Windows
-- 가상환경: `.venv` (`python -m venv .venv` → `.venv\Scripts\activate`)
-- 의존성: `requirements.txt`
+- 가상환경: `.venv` (`python -m venv .venv` → `.venv\Scripts\activate` → `pip install -r requirements.txt`)
+- 의존성: `pyproject.toml` (requirements.txt는 `-e .[dev]` 설치용)
+- 실행: `python -m bus_congestion <명령>` — 전체 순서: `holidays` → `reference` → `collect`(며칠) → `clean` → `aggregate`
+  - `holidays --year 2025` — 공휴일 (1회 호출)
+  - `clean --year 2025` — 받은 raw 전체를 다시 정제 (캠퍼스 노선은 받은 모든 날짜로 다시 계산되므로 항상 전체 재생성)
+  - `aggregate --year 2025` — `data/agg/51130/2025/by_{dow|daytype|month}_{route|base}.csv` 6종
+  - `collect --start 20250101 --end 20251231 --max-calls 900` — 혼잡도 raw. 받은 날짜는 건너뜀, 한도 초과 시 멈춤(종료코드 3)
+  - `reference --start 20250101 --end 20251231 --day-of-month 15` — 노선·정류장 스냅샷 (매월 15일)
+  - 수집 로그: `data/raw/51130/_collect_log.csv` (날짜별 saved / no_data / failed, 호출 수)
+- 테스트: `python -m pytest`
 - 저장 형식: CSV (UTF-8 with BOM `utf-8-sig` — 팀원이 엑셀로 열 때 한글 깨짐 방지)
 
 ## 폴더 구조
@@ -41,16 +51,39 @@ docs/api_bus_route.md 버스노선 API 명세 (번호↔ID 매핑)
 docs/api_bus_stop.md 버스정류장 API 명세 (정류장명↔ID 매핑)
 참고자료/             원본 가이드 PDF
 scripts/probe_api.py API 1회 점검 (표준 라이브러리만 사용, /api-probe 스킬이 실행)
+src/bus_congestion/  패키지 (합의된 구조, 2026-10-02)
+  config.py            설정·.env 읽기
+  __main__.py          명령 입구 (check, collect, reference)
+  api.py               공통 API 호출: 페이지·재시도·오류판정·호출 수 세기
+  storage.py           CSV 스키마(컬럼 순서)·원자적 저장·수집 로그
+  collect.py           혼잡도 raw 수집
+  reference.py         노선·정류장·공휴일 목록 스냅샷
+  matching.py          기본번호·노선번호 검색·정류장명·캠퍼스 노선 판정
+  clean.py             행 단위 정제 (raw → clean)
+  aggregate.py         집계표 6종 (clean → agg)
+config/              설정 (팀원이 엑셀로 고칠 수 있게 목록은 CSV)
+  settings.toml        지역코드·요청 간격·재시도·혼잡 기준값(미정)
+  campus_stops.csv     미래캠퍼스 정류장 10개
+  campus_manual_routes.csv 수동 포함 노선 (111(연세대경유))
+  excluded_route_nos.csv   분석 제외 노선번호 (고장·공차·조조)
+tests/               pytest
+data/                (git 제외) raw/ ref/ clean/ agg/ — 코드가 만든다
 .claude/             Claude Code 설정·스킬
 .env                 인증키 (git 제외, Claude는 읽지 않음)
 .env.example         .env 템플릿
-requirements.txt
+pyproject.toml / requirements.txt
 ```
-수집 코드 구조(src/, tests/, data/)는 아직 정하지 않았다. 만들기 전에 사용자와 합의한다.
+- 아직 없는 모듈(← 표시)은 해당 단계에서 만든다. 빈 파일을 미리 만들지 않는다.
+- 설정값·목록은 코드에 박지 않고 `config/`에서 읽는다. CLAUDE.md의 표와 `config/` 내용이 다르면 `config/`가 기준이며, 바꿀 때는 둘 다 고친다.
 
 ## 수집 규칙 (팀 합의 사항 — 변경 시 사용자 확인)
 - **범위**: 하루 단위로 **원주시 전체**(`ctpv_cd=51`, `sgg_cd=51130`)를 수집한다. 노선 필터링은 수집이 아니라 분석 단계에서 한다.
   - `rte_id`를 지정해 일부만 받지 않는다(노선이 바뀌어도 재수집 불필요, 강원도 확대 대비).
+- **수집 기간 (팀 확정, 2026-10-02)**: **2025년 1년치**(2025-01-01 ~ 2025-12-31)만 수집한다.
+  - 실측(2026-10-02) API 제공 기간: **2024-09-01 ~ 2026-09-06** (약 2년). 그 사이 매월 1일·15일 샘플에 빈 날 없음 → 2025년은 전체 제공.
+- **호출 한도**: API마다 **일일 1,000회**(개발계정). 원주 하루치 = 평일 약 24회, 공휴일 약 11회 → 2025년 1년치 약 8,000회 ≈ **9일에 나눠 수집**.
+  - 하루 실행은 `--max-calls 900` 정도로 제한해 점검용 호출 몫을 남긴다. 한도에 걸리면 다음 날 같은 명령을 다시 실행.
+  - 노선·정류장 스냅샷은 매월 15일 12회분만 받는다(노선 약 8회 + 정류장 약 2회 × 12 ≈ 120회). 각 API 한도는 따로 계산된다.
 - **파일 단위**: 날짜별 파일 `data/raw/{sgg_cd}/{opr_ymd}.csv` (예: `data/raw/51130/20260101.csv`)
 - **스키마**: 응답 `item`의 **16개 필드 전부**를 응답 그대로의 **소문자 컬럼명**으로, docs/api_spec.md 4.3 표의 순서대로 저장한다.
   - `opr_ymd, dow_cd, dow_nm, ctpv_cd, ctpv_nm, sgg_cd, sgg_nm, emd_cd, emd_nm, rte_id, opr_trntm, sttn_seq, sttn_id, trfc_mns_se_cd, tzon, cgst`
@@ -63,9 +96,45 @@ requirements.txt
   - 받은 행 수가 `totalCount`와 다르면 파일을 저장하지 않고 실패로 처리한다.
   - 하루치를 모두 받은 뒤 임시 파일에 쓰고 이름을 바꿔 저장한다(중간에 끊겨도 반쪽 파일이 남지 않게).
   - 이미 파일이 있는 날짜는 건너뛴다(덮어쓰기는 명시적 옵션으로만).
-- **노선 목록 스냅샷**: 버스노선 API로 원주 노선 목록을 받아 `data/ref/routes/{opr_ymd}.csv`로 저장한다.
+- **노선 목록 스냅샷**: 버스노선 API로 원주 노선 목록을 받아 `data/ref/routes/{opr_ymd}.csv`로 저장한다(2025년은 매월 15일).
   - `ctpv_cd=51`로 요청 → `NO_DATA_FOUND`면 `42`로 재요청. `sgg_cd in ("51130","42130")`만 남기고 `rte_id` 기준 중복 제거.
   - 컬럼은 응답 10개 필드 그대로(소문자, docs/api_bus_route.md 4장 순서). 값은 가공하지 않는다.
+
+## 정제 규칙 (팀 합의 사항 — 변경 시 사용자 확인)
+흐름: `data/raw/`(원본, 손대지 않음) → `data/clean/`(행 단위 정제) → `data/agg/`(집계표)
+근거가 된 품질 점검(2025-04-15, 23,611행)은 docs/api_spec.md 4.5 참고.
+
+- **대상**: **미래캠퍼스 경유 노선만** 남긴다(아래 "노선 매칭 규칙"의 정의: 정류장 기준 자동 추출 ∪ 수동 포함 목록).
+- **제거**
+  - 16개 값이 모두 같은 완전 중복 행 (하루 약 270행)
+  - 분석 제외 노선(`고장`, `공차`, `조조`)
+  - `tzon`이 `00`~`23` 범위 밖인 행 (`"24"`가 하루 1행 정도 존재)
+- **유지**: 같은 (노선·회차·정류장·시간대)인데 `cgst`만 다른 행은 **모두 유지**한다. `opr_trntm`은 한 번의 운행이 아니므로 각 행을 별개의 관측값으로 보고, 집계 시 평균에 반영한다.
+- **추가 컬럼** (raw 16개 뒤에 붙인다)
+  - `rte_no`: 노선번호(가장 최근 스냅샷 표기), `base_no`: 기본번호(노선 매칭 규칙의 정규식)
+  - `sttn_nm`: 정류장명(정류장 스냅샷들을 합쳐서 조회)
+  - `est_pax`: 추정 재차인원 = `round(cgst × 45 / 100)` — 추정치임을 문서에 명시
+  - `is_holiday`: 공휴일 여부 (아래 "공휴일 목록" 기준)
+- 정제는 raw를 다시 읽어 언제든 재생성할 수 있어야 한다(raw는 절대 수정하지 않음).
+
+### 집계표 (`data/agg/`)
+- **묶는 단위**: 날짜 단위 × 노선 × 정류장(`sttn_id`, `sttn_seq`) × 시간대(`tzon`)
+  - 날짜 단위 3종: **요일별**(월~일, `dow_cd`), **일자 유형별**(평일 / 토요일 / 일요일·공휴일), **월별**(01~12)
+  - 노선 단위 2종: **기본번호**(`base_no`, 예: "34번" 합산)와 **변형**(`rte_id`) — 노선 매칭 규칙의 "둘 다 제공"
+  - 기본번호 단위 값은 변형별 평균의 평균이 아니라 **행 단위 데이터에서 직접** 계산한다.
+- **지표**: 관측 수(`n`), 평균(`cgst_mean`), 최대(`cgst_max`), 중앙값(`cgst_p50`), 상위 10%(`cgst_p90`), 혼잡 발생 비율(`congested_ratio` = `cgst ≥ 기준값`인 관측 비율)
+  - **혼잡 기준값은 미정** — 코드에 박지 않고 설정값으로 둔다. 정해지기 전에는 `congested_ratio`를 비워 두거나 임시값임을 표시한다.
+- 일자 유형의 공휴일 판정은 아래 공휴일 목록을 쓴다.
+
+### 공휴일 목록
+- 출처: **한국천문연구원 특일정보 API** `getRestDeInfo` (docs/api_holiday.md)
+- `data/ref/holidays/{연도}.csv`로 저장해서 쓴다(매번 API를 부르지 않음). 대체공휴일·임시공휴일 포함. `isHoliday == "Y"`인 날짜가 공휴일.
+- 일자 유형 판정 순서: 일요일 또는 공휴일 → "일요일·공휴일", 토요일 → "토요일", 나머지 → "평일" (토요일이 공휴일이면 "일요일·공휴일")
+
+### 집계 세부 (구현 기준)
+- route 단위 키: `base_no, rte_id, rte_no, sttn_seq, sttn_id, sttn_nm` + 날짜 단위 + `tzon`
+- base 단위 키: `base_no, sttn_id, sttn_nm` + 날짜 단위 + `tzon` (변형마다 정류장 순서가 달라 `sttn_seq`는 묶지 않음)
+- `n_days`(그 칸에 관측이 있었던 날 수)를 함께 둔다 — 수집 중인 부분 데이터인지 판단용
 
 ## 노선 매칭 규칙 (팀 합의 사항 — 변경 시 사용자 확인)
 상세 근거: [docs/api_bus_route.md](docs/api_bus_route.md)
@@ -78,6 +147,7 @@ requirements.txt
   - 입력값은 공백과 끝의 "번"을 제거한 뒤 기본번호와 **완전히 같을 때만** 매칭한다.
     - "34" → `34연세대`, `34매지리` … (O) / `34-1`, `340` (X). `34-1`은 "34-1"로 따로 입력한다.
   - 매칭 결과가 0개면 오류로 알리고 비슷한 기본번호 후보를 보여준다.
+- **분석 제외 노선 (팀 확정, 2026-10-02)**: `rte_no`가 `고장`, `공차`, `조조`인 `rte_id`는 분석·조회에서 제외한다(운행 노선이 아닌 기록). raw CSV에서는 지우지 않는다(수집은 원본 그대로).
 - **변형 노선은 둘 다 제공**: 기본 보기는 기본번호 단위로 합산("34번"), 필요하면 `rte_id`(변형)별로 나눠 볼 수 있게 `rte_id`를 항상 유지한다.
 - **표시용 번호**: 같은 `rte_id`의 `rte_no` 표기가 날짜별로 다르면 **가장 최근 스냅샷**의 표기를 쓴다.
 - **미래캠퍼스 경유 노선** = ① 정류장 기준 자동 추출 **∪** ② 수동 포함 목록
@@ -114,8 +184,8 @@ requirements.txt
 - `.env`, `data/`, `.venv/`는 커밋하지 않는다.
 
 ## 확인 필요 (미해결)
-- 제공 기간(어느 날짜부터 데이터가 있는지), `tzon`·`cgst`의 정확한 의미·단위, `dow_cd` 기준(1=일요일?)
-- `item`이 1건일 때 리스트가 아닌 객체로 오는지
-- `rte_no`가 `고장`, `공차`, `조조`인 항목: 운행 노선이 아닌 기록(차량 고장·회송 등)으로 보임. 분석에서 제외할지 확인 필요.
+- `opr_trntm`(운행회차)의 정확한 의미 — 같은 회차가 여러 시간대에 나옴 (`dow_cd`는 1=일요일로 확인됨)
+- 혼잡 기준값(`congested_ratio`의 `cgst ≥ ?`) — 1년치 데이터를 본 뒤 결정
+- `item`이 1건일 때 리스트가 아닌 객체로 오는지 (코드는 둘 다 처리함)
 - 같은 `rte_no`에 서로 다른 `rte_id`가 여럿인 경우가 있음(예: `2-1하궁` ×3). 기본번호 합산에는 문제없지만 변형별 보기에서 구분 표시 방법 필요.
 - 미래캠퍼스 정류장 목록·수동 포함 노선을 어디에 둘지(설정 파일 위치·형식)는 코드 구조를 정할 때 결정.

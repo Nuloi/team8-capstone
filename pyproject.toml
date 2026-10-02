@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bus-congestion"
+version = "0.1.0"
+description = "8조 캡스톤 - 원주 미래캠퍼스 버스 혼잡도 수집·정제"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.32",
+    "python-dotenv>=1.0",
+    "pandas>=2.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

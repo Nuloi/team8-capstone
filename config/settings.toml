@@ -1,0 +1,36 @@
+# 수집·정제·집계 공통 설정
+# 날짜 범위는 여기 두지 않고 명령 인자로 받는다 (예: --start 20250101 --end 20251231)
+
+[api]
+base_url = "https://apis.data.go.kr/1613000"
+num_of_rows = 1000          # API 최대값
+timeout_sec = 15
+
+[request]
+interval_sec = 0.1          # 요청 사이 최소 간격 (API 제한 30tps보다 충분히 낮게)
+max_retries = 3             # 네트워크 오류·타임아웃 재시도 횟수 (NO_DATA_FOUND는 재시도 안 함)
+backoff_sec = 1.0           # 재시도 대기: backoff_sec × 2^(시도-1)
+
+[region]
+ctpv_cd = "51"              # 강원특별자치도
+sgg_cd = "51130"            # 원주시
+# 버스노선 API는 날짜에 따라 구 코드로만 조회됨 (docs/api_bus_route.md 3장)
+route_ctpv_fallback = "42"
+route_sgg_cds = ["51130", "42130"]
+
+[holiday]
+# 한국천문연구원 특일정보 — 공휴일 정보조회 (docs/api_holiday.md)
+url = "http://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo"
+
+[paths]
+data_dir = "data"           # 프로젝트 루트 기준
+
+[clean]
+valid_tzon_min = 0
+valid_tzon_max = 23
+pax_capacity = 45           # cgst = 45명 기준 재차율(%)로 추정 → est_pax = round(cgst × 45 / 100)
+
+[aggregate]
+# 혼잡 기준값 (cgst ≥ 값이면 혼잡) — 미정. 1년치 데이터를 본 뒤 정한다.
+# 정해지면 주석을 풀고 값을 넣는다. 비어 있으면 congested_ratio는 계산하지 않는다.
+# congested_threshold = 27

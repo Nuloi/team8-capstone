@@ -1,4 +1,3 @@
-requests>=2.32
-python-dotenv>=1.0
-pandas>=2.2
-pytest>=8.0
+# 의존성 목록은 pyproject.toml에 있다. 이 파일은 설치 편의용.
+# 사용: pip install -r requirements.txt
+-e .[dev]

@@ -11,6 +11,7 @@ data/
 __pycache__/
 *.pyc
 .pytest_cache/
+*.egg-info/
 
 # Claude Code 개인 설정
 .claude/settings.local.json
