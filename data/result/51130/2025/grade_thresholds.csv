@@ -1,0 +1,2 @@
+﻿method,q_low,q_high,t_low,t_high,t1,t2,t3,n_cells,n_days,date_min,date_max,provisional,generated_at
+quantile,0.3333,0.6667,9.03,13.19,level < 9.03,9.03 <= level < 13.19,level >= 13.19,64705,151,20250101,20250531,True,2026-10-06T13:29:42

@@ -6,17 +6,21 @@
     holidays   공휴일 목록              예) holidays --year 2025
     clean      행 단위 정제             예) clean --year 2025
     aggregate  집계표                   예) aggregate --year 2025
+    pattern    1단계 혼잡 패턴 지수     예) pattern --year 2025
 """
 
 import argparse
 import sys
 from datetime import date, datetime
 
+import pandas as pd
+
 from bus_congestion.aggregate import AggregateError, aggregate_year
 from bus_congestion.api import ApiClient, ApiError, CallBudgetExceededError, QuotaExceededError
 from bus_congestion.clean import CleanError, clean_year
 from bus_congestion.collect import collect_range, iter_dates
 from bus_congestion.config import ConfigError, load_service_key, load_settings
+from bus_congestion.pattern import PatternError, run_pattern
 from bus_congestion.reference import snapshot_holidays, snapshot_routes, snapshot_stops
 from bus_congestion.storage import SchemaError
 
@@ -132,6 +136,19 @@ def cmd_aggregate(args) -> int:
     return 0
 
 
+def cmd_pattern(args) -> int:
+    settings = load_settings()
+    written = run_pattern(settings, settings.data_dir, args.year)
+    out_dir = settings.data_dir / "result" / settings["region"]["sgg_cd"] / str(args.year)
+    print(f"{args.year} 1단계 혼잡 패턴 → {out_dir}")
+    for name, n in written.items():
+        print(f"  {name}: {n:,}행")
+    th = pd.read_csv(out_dir / "grade_thresholds.csv", encoding="utf-8-sig").iloc[0]
+    print(f"  등급 경계(임시, {th['date_min']}~{th['date_max']} {th['n_days']}일 기준): "
+          f"T1 여유 < {th['t_low']} ≤ T2 보통 < {th['t_high']} ≤ T3 혼잡")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="bus_congestion", description="원주 버스 혼잡도 수집·정제")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -161,13 +178,17 @@ def main(argv=None) -> int:
     p.add_argument("--year", type=int, required=True)
     p.set_defaults(func=cmd_aggregate)
 
+    p = sub.add_parser("pattern", help="1단계 혼잡 패턴 지수 (clean → result)")
+    p.add_argument("--year", type=int, required=True)
+    p.set_defaults(func=cmd_pattern)
+
     args = parser.parse_args(argv)
     try:
         return args.func(args)
     except ConfigError as e:
         print(f"[설정 오류] {e}", file=sys.stderr)
         return 1
-    except (CleanError, AggregateError) as e:
+    except (CleanError, AggregateError, PatternError) as e:
         print(f"[오류] {e}", file=sys.stderr)
         return 1
 

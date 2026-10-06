@@ -7,8 +7,11 @@
 - 팀원: 유건형, 이다현, 지현초
 
 ## 이 저장소에서의 내 역할
-**공공데이터 API로 데이터를 가져와 CSV로 저장하는 수집 파트.** 분석·웹 파트는 다른 팀원이 이 CSV를 사용한다.
-따라서 CSV 스키마(컬럼명·타입)는 팀원과의 계약이다. 바꿀 때는 반드시 사용자에게 먼저 확인한다.
+**공공데이터 API로 데이터를 수집·정제하고, 혼잡 판단·예측 알고리즘을 구현해 결과 파일을 웹 파트에 넘기는 파트.**
+- **웹 화면은 구현하지 않는다**(다른 팀원 담당). 웹이 바로 쓸 수 있는 결과 파일까지가 이 저장소의 범위.
+- 결과 CSV 스키마(컬럼명·타입)는 팀원과의 계약이다. 바꿀 때는 반드시 사용자에게 먼저 확인한다.
+- 알고리즘 설계: [docs/algorithm_design.md](docs/algorithm_design.md) (1단계 혼잡 패턴 지수 → 2단계 예측 모델). **1단계 구현 완료**, 2단계 구현 전.
+- **혼잡 등급 (임시)**: 3단계 `T1` 여유 / `T2` 보통 / `T3` 혼잡 — 수준 분포의 하위·중간·상위 1/3. 2025년 수집 완료 후 재결정.
 
 ## 사용 API
 - 한국교통안전공단 「노선별 혼잡도」(IF-APR-018), 공공데이터포털
@@ -33,7 +36,9 @@
 - Python 3.12, Windows
 - 가상환경: `.venv` (`python -m venv .venv` → `.venv\Scripts\activate` → `pip install -r requirements.txt`)
 - 의존성: `pyproject.toml` (requirements.txt는 `-e .[dev]` 설치용)
-- 실행: `python -m bus_congestion <명령>` — 전체 순서: `holidays` → `reference` → `collect`(며칠) → `clean` → `aggregate`
+- 실행: `python -m bus_congestion <명령>` — 전체 순서: `holidays` → `reference` → `collect`(며칠) → `clean` → `aggregate` / `pattern`
+  - `pattern --year 2025` — 1단계 혼잡 패턴 지수 → `data/result/51130/2025/` (웹 파트에 넘길 결과 5종, docs/algorithm_design.md 5.2)
+  - `reference` 스냅샷은 수집한 기간의 매월 15일을 모두 받아야 한다 — 없으면 새 변형 노선의 `rte_no`·`base_no`가 비어 1단계 결과에서 노선이 분리된다
   - `holidays --year 2025` — 공휴일 (1회 호출)
   - `clean --year 2025` — 받은 raw 전체를 다시 정제 (캠퍼스 노선은 받은 모든 날짜로 다시 계산되므로 항상 전체 재생성)
   - `aggregate --year 2025` — `data/agg/51130/2025/by_{dow|daytype|month}_{route|base}.csv` 6종
@@ -49,6 +54,9 @@ CLAUDE.md            이 파일
 docs/api_spec.md     노선별 혼잡도 API 명세
 docs/api_bus_route.md 버스노선 API 명세 (번호↔ID 매핑)
 docs/api_bus_stop.md 버스정류장 API 명세 (정류장명↔ID 매핑)
+docs/api_holiday.md  특일정보(공휴일) API 명세
+docs/algorithm_design.md 혼잡 판단·예측 알고리즘 설계
+docs/architecture.md 그림으로 보는 전체 구조 (Mermaid: 파이프라인·시퀀스·UML·알고리즘·결과 파일) — 구조가 바뀌면 같이 고친다
 참고자료/             원본 가이드 PDF
 scripts/probe_api.py API 1회 점검 (표준 라이브러리만 사용, /api-probe 스킬이 실행)
 src/bus_congestion/  패키지 (합의된 구조, 2026-10-02)
@@ -61,13 +69,15 @@ src/bus_congestion/  패키지 (합의된 구조, 2026-10-02)
   matching.py          기본번호·노선번호 검색·정류장명·캠퍼스 노선 판정
   clean.py             행 단위 정제 (raw → clean)
   aggregate.py         집계표 6종 (clean → agg)
+  pattern.py           1단계 혼잡 패턴 지수: 수준·등급·빈도·지속·혼잡 구간·추천 (clean → result)
 config/              설정 (팀원이 엑셀로 고칠 수 있게 목록은 CSV)
   settings.toml        지역코드·요청 간격·재시도·혼잡 기준값(미정)
   campus_stops.csv     미래캠퍼스 정류장 10개
   campus_manual_routes.csv 수동 포함 노선 (111(연세대경유))
   excluded_route_nos.csv   분석 제외 노선번호 (고장·공차·조조)
+  academic_calendar.csv    2025 학사일정 → 기간(학기·시험·방학·계절학기), 알고리즘용
 tests/               pytest
-data/                (git 제외) raw/ ref/ clean/ agg/ — 코드가 만든다
+data/                코드가 만든다. ref/ agg/ result/ 는 커밋, raw/ clean/ 은 git 제외
 .claude/             Claude Code 설정·스킬
 .env                 인증키 (git 제외, Claude는 읽지 않음)
 .env.example         .env 템플릿
@@ -181,11 +191,15 @@ pyproject.toml / requirements.txt
 
 ## Git
 - GitHub로 팀원과 공유 예정. 커밋·푸시는 사용자가 요청할 때만 한다.
-- `.env`, `data/`, `.venv/`는 커밋하지 않는다.
+- `.env`, `.venv/`는 커밋하지 않는다.
+- **데이터 (팀 결정 2026-10-06)**: `data/ref/`, `data/agg/`, `data/result/`는 커밋한다(팀원 공유용). `data/raw/`, `data/clean/`은 용량 때문에 커밋하지 않는다(1년치 약 1GB, raw에서 재생성 가능).
+  - agg·result는 재실행할 때마다 다시 만들어져 git 기록이 쌓이므로, **수집 중간(1~5월) 1회 + 수집 완료 후 1회**처럼 마일스톤에만 커밋한다.
+  - 커밋 전에 `clean` → `aggregate` → `pattern`을 다시 돌려 세 결과의 데이터 기간을 맞춘다.
 
 ## 확인 필요 (미해결)
 - `opr_trntm`(운행회차)의 정확한 의미 — 같은 회차가 여러 시간대에 나옴 (`dow_cd`는 1=일요일로 확인됨)
-- 혼잡 기준값(`congested_ratio`의 `cgst ≥ ?`) — 1년치 데이터를 본 뒤 결정
+- 혼잡 기준값(`congested_ratio`의 `cgst ≥ ?`) + 알고리즘 등급 최종 기준 — 1년치 데이터를 본 뒤 함께 결정 (현재 등급은 1/3 분위수 임시 기준)
+- 웹 팀원에게 넘길 결과 파일의 형식(CSV/JSON)·컬럼 — 웹 팀원과 합의 필요
 - `item`이 1건일 때 리스트가 아닌 객체로 오는지 (코드는 둘 다 처리함)
 - 같은 `rte_no`에 서로 다른 `rte_id`가 여럿인 경우가 있음(예: `2-1하궁` ×3). 기본번호 합산에는 문제없지만 변형별 보기에서 구분 표시 방법 필요.
 - 미래캠퍼스 정류장 목록·수동 포함 노선을 어디에 둘지(설정 파일 위치·형식)는 코드 구조를 정할 때 결정.

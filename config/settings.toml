@@ -30,6 +30,13 @@ valid_tzon_min = 0
 valid_tzon_max = 23
 pax_capacity = 45           # cgst = 45명 기준 재차율(%)로 추정 → est_pax = round(cgst × 45 / 100)
 
+[pattern]
+# 1단계 혼잡 패턴 지수 (docs/algorithm_design.md 2장)
+shrinkage_k = 5                     # 수준 L 보정 강도: 관측일이 적은 칸을 노선 평균 쪽으로 당기는 정도
+grade_method = "quantile"           # 임시 기준: 수준 L 분포의 분위수로 등급 경계 계산
+grade_quantiles = [0.3333, 0.6667]  # T1|T2 경계, T2|T3 경계 (하위·중간·상위 1/3)
+recommend_window_hours = 2          # 덜 혼잡한 시간 추천 범위: ±N시간
+
 [aggregate]
 # 혼잡 기준값 (cgst ≥ 값이면 혼잡) — 미정. 1년치 데이터를 본 뒤 정한다.
 # 정해지면 주석을 풀고 값을 넣는다. 비어 있으면 congested_ratio는 계산하지 않는다.

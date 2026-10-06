@@ -9,6 +9,7 @@ import csv
 import os
 import tomllib
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -59,6 +60,22 @@ def load_settings(config_dir: Path = CONFIG_DIR) -> Settings:
         campus_manual_route_ids=_read_column(config_dir / "campus_manual_routes.csv", "rte_id"),
         excluded_route_nos=_read_column(config_dir / "excluded_route_nos.csv", "rte_no"),
     )
+
+
+def load_academic_calendar(config_dir: Path = CONFIG_DIR) -> dict[str, str]:
+    """학사일정 → {YYYYMMDD: 기간}. 기간이 겹치는 날이 있으면 ConfigError."""
+    out: dict[str, str] = {}
+    with (config_dir / "academic_calendar.csv").open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            d = date.fromisoformat(row["start"].strip())
+            end = date.fromisoformat(row["end"].strip())
+            while d <= end:
+                ymd = d.strftime("%Y%m%d")
+                if ymd in out:
+                    raise ConfigError(f"academic_calendar.csv: {ymd}이 두 기간에 겹칩니다.")
+                out[ymd] = row["period"].strip()
+                d += timedelta(days=1)
+    return out
 
 
 def load_service_key() -> str:
