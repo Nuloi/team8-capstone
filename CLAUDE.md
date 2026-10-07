@@ -7,11 +7,12 @@
 - 팀원: 유건형, 이다현, 지현초
 
 ## 이 저장소에서의 내 역할
-**공공데이터 API로 데이터를 수집·정제하고, 혼잡 판단·예측 알고리즘을 구현해 결과 파일을 웹 파트에 넘기는 파트.**
+**공공데이터 API로 데이터를 수집·정제하고, 혼잡 판단 알고리즘을 구현해 결과 파일을 웹 파트에 넘기는 파트.**
+- 알고리즘이 답하는 것: **그 시간대 버스(노선·방향)·정류장이 얼마나 혼잡한가**, **언제 시간대가 비는가**. 재차율 예측이 목표가 아니다(팀 결정 2026-10-06).
 - **웹 화면은 구현하지 않는다**(다른 팀원 담당). 웹이 바로 쓸 수 있는 결과 파일까지가 이 저장소의 범위.
 - 결과 CSV 스키마(컬럼명·타입)는 팀원과의 계약이다. 바꿀 때는 반드시 사용자에게 먼저 확인한다.
-- 알고리즘 설계: [docs/algorithm_design.md](docs/algorithm_design.md) (1단계 혼잡 패턴 지수 → 2단계 예측 모델). **1단계 구현 완료**, 2단계 구현 전.
-- **혼잡 등급 (임시)**: 3단계 `T1` 여유 / `T2` 보통 / `T3` 혼잡 — 수준 분포의 하위·중간·상위 1/3. 2025년 수집 완료 후 재결정.
+- 알고리즘 설계: [docs/algorithm_design.md](docs/algorithm_design.md) — 혼잡 패턴 지수 구현 완료(버스·정류장 단위 등급, 혼잡·여유 구간, 추천, 상행/하행 표시명). 재차율 예측 모델은 진행하지 않음.
+- **혼잡 등급 (임시)**: 3단계 `T1` 여유 / `T2` 보통 / `T3` 혼잡 — 수준 분포의 하위·중간·상위 1/3(버스·정류장 단위 경계 따로). 2025년 수집 완료 후 재결정 — 전체 기준이라 학기 평일은 대부분 혼잡이 되는 문제가 있어 "맥락 내 상대 등급"을 대안으로 검토 중.
 
 ## 사용 API
 - 한국교통안전공단 「노선별 혼잡도」(IF-APR-018), 공공데이터포털
@@ -37,7 +38,7 @@
 - 가상환경: `.venv` (`python -m venv .venv` → `.venv\Scripts\activate` → `pip install -r requirements.txt`)
 - 의존성: `pyproject.toml` (requirements.txt는 `-e .[dev]` 설치용)
 - 실행: `python -m bus_congestion <명령>` — 전체 순서: `holidays` → `reference` → `collect`(며칠) → `clean` → `aggregate` / `pattern`
-  - `pattern --year 2025` — 1단계 혼잡 패턴 지수 → `data/result/51130/2025/` (웹 파트에 넘길 결과 5종, docs/algorithm_design.md 5.2)
+  - `pattern --year 2025` — 혼잡 판단 알고리즘 → `data/result/51130/2025/` (웹 파트에 넘길 결과 6종: `bus_hourly`, `pattern_base`, `pattern_route`, `time_windows`, `recommendations`, `grade_thresholds` — docs/algorithm_design.md 4장)
   - `reference` 스냅샷은 수집한 기간의 매월 15일을 모두 받아야 한다 — 없으면 새 변형 노선의 `rte_no`·`base_no`가 비어 1단계 결과에서 노선이 분리된다
   - `holidays --year 2025` — 공휴일 (1회 호출)
   - `clean --year 2025` — 받은 raw 전체를 다시 정제 (캠퍼스 노선은 받은 모든 날짜로 다시 계산되므로 항상 전체 재생성)
@@ -55,21 +56,21 @@ docs/api_spec.md     노선별 혼잡도 API 명세
 docs/api_bus_route.md 버스노선 API 명세 (번호↔ID 매핑)
 docs/api_bus_stop.md 버스정류장 API 명세 (정류장명↔ID 매핑)
 docs/api_holiday.md  특일정보(공휴일) API 명세
-docs/algorithm_design.md 혼잡 판단·예측 알고리즘 설계
+docs/algorithm_design.md 혼잡 판단 알고리즘 설계
 docs/architecture.md 그림으로 보는 전체 구조 (Mermaid: 파이프라인·시퀀스·UML·알고리즘·결과 파일) — 구조가 바뀌면 같이 고친다
 참고자료/             원본 가이드 PDF
 scripts/probe_api.py API 1회 점검 (표준 라이브러리만 사용, /api-probe 스킬이 실행)
 src/bus_congestion/  패키지 (합의된 구조, 2026-10-02)
   config.py            설정·.env 읽기
-  __main__.py          명령 입구 (check, collect, reference)
+  __main__.py          명령 입구 (check, collect, reference, holidays, clean, aggregate, pattern)
   api.py               공통 API 호출: 페이지·재시도·오류판정·호출 수 세기
   storage.py           CSV 스키마(컬럼 순서)·원자적 저장·수집 로그
   collect.py           혼잡도 raw 수집
   reference.py         노선·정류장·공휴일 목록 스냅샷
-  matching.py          기본번호·노선번호 검색·정류장명·캠퍼스 노선 판정
+  matching.py          기본번호·노선번호 검색·정류장명·캠퍼스 노선 판정·상행/하행 판정·표시명
   clean.py             행 단위 정제 (raw → clean)
   aggregate.py         집계표 6종 (clean → agg)
-  pattern.py           1단계 혼잡 패턴 지수: 수준·등급·빈도·지속·혼잡 구간·추천 (clean → result)
+  pattern.py           혼잡 판단 알고리즘: 버스·정류장 단위 등급·빈도·지속, 혼잡·여유 구간, 추천 (clean → result)
 config/              설정 (팀원이 엑셀로 고칠 수 있게 목록은 CSV)
   settings.toml        지역코드·요청 간격·재시도·혼잡 기준값(미정)
   campus_stops.csv     미래캠퍼스 정류장 10개

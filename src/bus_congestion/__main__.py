@@ -143,9 +143,10 @@ def cmd_pattern(args) -> int:
     print(f"{args.year} 1단계 혼잡 패턴 → {out_dir}")
     for name, n in written.items():
         print(f"  {name}: {n:,}행")
-    th = pd.read_csv(out_dir / "grade_thresholds.csv", encoding="utf-8-sig").iloc[0]
-    print(f"  등급 경계(임시, {th['date_min']}~{th['date_max']} {th['n_days']}일 기준): "
-          f"T1 여유 < {th['t_low']} ≤ T2 보통 < {th['t_high']} ≤ T3 혼잡")
+    ths = pd.read_csv(out_dir / "grade_thresholds.csv", encoding="utf-8-sig")
+    print(f"  등급 경계(임시, {ths['date_min'].iloc[0]}~{ths['date_max'].iloc[0]} {ths['n_days'].iloc[0]}일 기준):")
+    for th in ths.itertuples():
+        print(f"    {th.scope}: T1 여유 < {th.t_low} ≤ T2 보통 < {th.t_high} ≤ T3 혼잡")
     return 0
 
 

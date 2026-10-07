@@ -26,7 +26,7 @@ flowchart TB
     subgraph S3["3 · 분석·알고리즘"]
         direction LR
         C5["⑤ aggregate"] --> D5[("agg/51130/2025<br/>집계표 6종")]
-        C6["⑥ pattern<br/>1단계 알고리즘"] --> D6[("result/51130/2025<br/>결과 5종")]
+        C6["⑥ pattern<br/>혼잡 판단 알고리즘"] --> D6[("result/51130/2025<br/>결과 6종")]
     end
 
     CFG[["config/<br/>설정 · 캠퍼스 정류장 · 학사일정"]]
@@ -47,7 +47,7 @@ flowchart TB
 | ③ | `collect --start … --end … --max-calls 900` | 혼잡도 API | `raw/51130/{날짜}.csv` | 일일 한도 1,000회 → 며칠에 나눠 |
 | ④ | `clean --year 2025` | raw + ref | `clean/51130/{날짜}.csv` | 항상 전체 재생성 |
 | ⑤ | `aggregate --year 2025` | clean | `agg/51130/2025/by_*.csv` 6종 | 단순 통계 |
-| ⑥ | `pattern --year 2025` | clean + 학사일정 | `result/51130/2025/*.csv` 5종 | **웹에 넘기는 결과** |
+| ⑥ | `pattern --year 2025` | clean + 학사일정 | `result/51130/2025/*.csv` 6종 | **웹에 넘기는 결과** |
 
 ---
 
@@ -191,6 +191,8 @@ classDiagram
         +load_route_names()
         +load_stop_names()
         +campus_route_ids()
+        +stop_directions()
+        +stop_labels()
     }
     class clean["clean.py"] {
         +CleanContext
@@ -210,7 +212,8 @@ classDiagram
         +compute_thresholds()
         +assign_grade()
         +run_lengths()
-        +congestion_windows()
+        +add_directions()
+        +time_windows()
         +recommendations()
         +run_pattern()
     }
@@ -232,6 +235,7 @@ classDiagram
     aggregate --> clean
     pattern --> aggregate
     pattern --> config
+    pattern --> matching
 ```
 
 | 모듈 | 역할 |
@@ -241,41 +245,60 @@ classDiagram
 | `storage.py` | CSV 컬럼 순서(팀과의 스키마 계약), 원자적 저장, 수집 로그 |
 | `collect.py` | 혼잡도 하루 단위 수집, 이어받기 |
 | `reference.py` | 노선·정류장·공휴일 목록 스냅샷 |
-| `matching.py` | 기본번호(34연세대→34), 노선번호 검색, 이름 조회, 캠퍼스 노선 판정 |
+| `matching.py` | 기본번호(34연세대→34), 노선번호 검색, 이름 조회, 캠퍼스 노선 판정, **상행/하행 판정·표시명** |
 | `clean.py` | 행 단위 정제 |
 | `aggregate.py` | 집계표 6종 |
-| `pattern.py` | 1단계 혼잡 패턴 지수 |
+| `pattern.py` | 혼잡 판단 알고리즘: 버스·정류장 단위 등급, 혼잡·여유 구간, 추천 |
 
 ---
 
-## 5. 1단계 알고리즘 — 혼잡 패턴 지수
+## 5. 혼잡 판단 알고리즘
+
+목표: **그 시간대 버스가 얼마나 혼잡한가**, **언제 시간대가 비는가**. (재차율 예측이 아니라 등급·시간대가 결과)
 
 ```mermaid
 flowchart TB
     IN[("clean 데이터<br/>+ 학사일정")]
-    S1["<b>① 칸 나누기</b><br/>노선 × 정류장 × 기간 × 일자유형 × 시간대"]
+    S0["<b>⓪ 상행/하행 판정</b><br/>같은 이름 정류장 쌍의 중간 순서 → 회차 지점<br/>회차 전 = 상행, 후 = 하행"]
+    S1["<b>① 칸 나누기</b><br/>버스: 노선 × 방향 × 기간 × 일자유형 × 시간대<br/>정류장: 노선 × 정류장 × 기간 × 일자유형 × 시간대"]
     S2["<b>② 날별 값</b><br/>칸 안에서 날짜마다 평균 cgst 1개"]
     S3["<b>③ 보정 수준 L</b><br/>L = (d·평균 + k·노선평균) / (d + k)<br/>d = 관측일 수, k = 5"]
-    S4["<b>④ 등급 경계</b> (임시)<br/>기본번호 칸들의 L 분포<br/>33분위 = t_low, 67분위 = t_high"]
+    S4["<b>④ 등급 경계</b> (임시)<br/>버스·정류장 단위 따로<br/>L 분포의 33분위 = t_low, 67분위 = t_high"]
     S5{"<b>⑤ 등급</b><br/>L 값은?"}
     G1["T1 여유"]
     G2["T2 보통"]
     G3["T3 혼잡"]
-    S6["<b>⑥ 빈도·지속</b> (기준 t_high)<br/>F = 혼잡한 날 비율<br/>Dt = 연속 혼잡 시간<br/>Ds = 연속 혼잡 정류장"]
-    O1[["혼잡 구간<br/>연속 T3 시간대 + 피크"]]
-    O2[["덜 혼잡한 시간 추천<br/>±2시간 중 등급 낮고 L 최저"]]
-    O3[["등급·지표 표<br/>pattern_base / pattern_route"]]
+    S6["<b>⑥ 빈도·지속</b> (기준 t_high)<br/>F = 혼잡한 날 비율<br/>Dt = 연속 혼잡 시간 · Ds = 연속 혼잡 정류장"]
+    O0[["얼마나 혼잡한가<br/>bus_hourly · pattern_base · pattern_route"]]
+    O1[["언제 혼잡한가<br/>T3 연속 구간 + 피크"]]
+    O2[["언제 비는가<br/>T1 연속 구간 + 가장 한산한 시간"]]
+    O3[["언제 타면 덜 붐비나<br/>가장 가까운 여유(T1), 없으면 보통(T2)"]]
     O4[["경계값<br/>grade_thresholds"]]
 
-    IN --> S1 --> S2 --> S3 --> S4 --> S5
+    IN --> S0 --> S1 --> S2 --> S3 --> S4 --> S5
     S5 -- "L < t_low" --> G1
     S5 -- "t_low ≤ L < t_high" --> G2
     S5 -- "L ≥ t_high" --> G3
-    G1 & G2 & G3 --> S6 --> O3
+    G1 & G2 & G3 --> S6 --> O0
     G3 --> O1
-    G3 --> O2
+    G1 --> O2
+    G3 --> O3
     S4 --> O4
 ```
+
+**상행/하행 판정 예시** — 왕복 노선은 같은 이름 정류장이 갈 때·올 때 한 번씩 나온다
+
+```mermaid
+flowchart LR
+    A1["0 · 기점"] --> B1["1 · 원주의료원"] --> C1["2 · YWCA"] --> T(["3 · 회차"])
+    T --> C2["4 · YWCA"] --> B2["5 · 원주의료원"] --> A2["6 · 기점"]
+    classDef up fill:#dbeafe,stroke:#2563eb
+    classDef down fill:#fde2e2,stroke:#dc2626
+    class A1,B1,C1,T up
+    class C2,B2,A2 down
+```
+쌍(1↔5, 2↔4)의 중간 순서 = 3 → 회차 지점 3. 0~3은 **상행**(파랑), 4~6은 **하행**(빨강) → `원주의료원(상행)`, `원주의료원(하행)`.
+상행·하행으로도 이름이 겹치면 정류장 ID 뒤 4자리를 붙인다: `구억동(상행·0241)`.
 
 **보정 수준 L이 필요한 이유** — 관측일이 하루뿐인 칸은 그날 우연히 튄 값이 그대로 "혼잡"이 될 수 있다. 관측일이 적을수록 같은 노선 평균 쪽으로 당겨 안정시킨다.
 
@@ -284,47 +307,30 @@ flowchart TB
 | 1일 | 90% | 35% | (1·90 + 5·35) / 6 ≈ **44%** |
 | 10일 | 30% | 35% | (10·30 + 5·35) / 15 ≈ **32%** |
 
-**혼잡 구간 예시** — 한 정류장의 시간대별 등급이 아래와 같으면
+**혼잡·여유 구간과 추천 예시** — 한 버스(노선·방향)의 시간대별 등급이 아래와 같으면
 
 ```mermaid
 gantt
-    title 34번 원주의료원 · 학기 · 평일 (예시)
+    title 34번 상행 · 학기 · 평일 (예시)
     dateFormat HH
     axisFormat %H시
     section 등급
-    T1 여유 :done, 07, 1h
+    T1 여유 (여유 구간 1) :done, 06, 2h
     T2 보통 :active, 08, 1h
-    T3 혼잡 (구간 1, 피크 12시) :crit, 10, 4h
-    T2 보통 :active, 14, 1h
-    T3 혼잡 (구간 2) :crit, 16, 2h
+    T3 혼잡 (혼잡 구간 1, 피크 10시) :crit, 09, 3h
+    T2 보통 :active, 12, 1h
+    T3 혼잡 (혼잡 구간 2) :crit, 13, 4h
+    T1 여유 (여유 구간 2) :done, 20, 2h
 ```
 
-→ `congestion_windows.csv`에 "10~13시(피크 12시)", "16~17시" 두 구간이 나오고, 13시 혼잡 칸에는 ±2시간 중 덜 붐비는 14시(T2)가 추천된다.
+→ `time_windows.csv`: 혼잡 "09~11시(피크 10시)", "13~16시" / 여유 "06~07시", "20~21시"
+→ `recommendations.csv`: 9시 혼잡 → **7시(여유)** 추천 (8시는 보통이라 여유 우선), 16시 혼잡 → **20시(여유)** 추천 (거리 제한 없이 가장 가까운 여유)
 
 ---
 
-## 6. 2단계 알고리즘 — 예측 모델 (설계만, 구현 전)
+## 6. (진행하지 않음) 재차율 예측 모델
 
-```mermaid
-flowchart LR
-    subgraph X["입력 요소"]
-        X1["시간: 시간대, 요일, 일자유형, 월"]
-        X2["기간: 학기/시험/방학/계절학기"]
-        X3["특일: 공휴일, 연휴 전날·다음날"]
-        X4["노선: 기본번호, 변형"]
-        X5["정류장: 캠퍼스 여부, 노선 내 위치, 방면"]
-        X6["이력: 과거 평균 수준 (학습 기간만)"]
-    end
-    M["그래디언트 부스팅<br/>(scikit-learn)"]
-    Y["예상 재차율<br/>→ 추정 인원, 등급"]
-    B["1단계 L<br/>(기준선)"]
-    V{"기간 분할 검증<br/>1~10월 학습 / 11~12월 평가<br/>MAE가 기준선보다 작은가?"}
-
-    X --> M --> Y --> V
-    B --> V
-    V -- "예" --> USE["예측값 사용"]
-    V -- "아니오" --> KEEP["1단계 L 사용"]
-```
+2026-10-06 팀 결정: 목표는 재차율 예측이 아니라 **혼잡 정도와 빈 시간대**이므로, 그래디언트 부스팅 예측 모델은 만들지 않고 5장의 알고리즘을 확장했다 (버스 단위 등급, 여유 구간, 추천 개선, 상행/하행 구분).
 
 ---
 
@@ -332,17 +338,29 @@ flowchart LR
 
 ```mermaid
 erDiagram
-    PATTERN_BASE {
+    BUS_HOURLY {
         string base_no PK "34"
-        string sttn_id PK
+        string direction PK "상행/하행"
         string period PK "학기/시험/방학/계절학기"
         string day_type PK "평일/토요일/일요일·공휴일"
         string tzon PK "00~23"
-        string sttn_nm
-        int n_days "관측일 수"
-        float level "보정 수준 L (%)"
-        int est_pax "추정 인원"
         string grade "T1/T2/T3"
+        string grade_name "여유/보통/혼잡"
+        float level "보정 수준 L"
+        int n_days "관측일 수"
+        string peak_sttn_label "그 시간 가장 붐비는 정류장"
+    }
+    PATTERN_BASE {
+        string base_no PK
+        string sttn_id PK
+        string period PK
+        string day_type PK
+        string tzon PK
+        string direction "상행/하행"
+        string sttn_label "원주의료원(상행)"
+        string grade
+        string grade_name
+        float level
         float congested_days_ratio "F"
         float duration_hours "Dt"
     }
@@ -355,31 +373,38 @@ erDiagram
         string tzon PK
         string base_no FK
         string rte_no
-        float level
+        string sttn_label
         string grade
         float segment_stops "Ds"
     }
-    CONGESTION_WINDOWS {
+    TIME_WINDOWS {
+        string scope "버스/정류장"
+        string kind "혼잡/여유"
         string base_no FK
-        string sttn_id FK
+        string direction
+        string sttn_label "정류장 단위만"
         string period
         string day_type
         string start_tzon
         string end_tzon
         int hours
-        string peak_tzon
+        string peak_tzon "혼잡: 가장 붐비는"
+        string calmest_tzon "여유: 가장 한산한"
     }
     RECOMMENDATIONS {
+        string scope "버스/정류장"
         string base_no FK
-        string sttn_id FK
+        string direction
+        string sttn_label
         string period
         string day_type
-        string from_tzon
-        string rec_tzon
-        string rec_grade
-        int shift_hours
+        string from_tzon "혼잡한 시간"
+        string rec_tzon "추천 시간"
+        string rec_grade_name "여유/보통"
+        int shift_hours "음수=더 일찍"
     }
     GRADE_THRESHOLDS {
+        string scope PK "버스/정류장"
         float t_low
         float t_high
         string date_min
@@ -387,11 +412,22 @@ erDiagram
         bool provisional
     }
 
+    BUS_HOURLY ||--o{ PATTERN_BASE : "같은 노선·방향의 정류장들"
     PATTERN_BASE ||--o{ PATTERN_ROUTE : "기본번호 → 변형"
-    PATTERN_BASE ||--o{ CONGESTION_WINDOWS : "T3 연속 시간대"
+    BUS_HOURLY ||--o{ TIME_WINDOWS : "버스 단위 구간"
+    PATTERN_BASE ||--o{ TIME_WINDOWS : "정류장 단위 구간"
+    BUS_HOURLY ||--o{ RECOMMENDATIONS : "T3 칸마다 추천"
     PATTERN_BASE ||--o{ RECOMMENDATIONS : "T3 칸마다 추천"
-    GRADE_THRESHOLDS ||--|| PATTERN_BASE : "등급 경계"
+    GRADE_THRESHOLDS ||--o{ BUS_HOURLY : "등급 경계"
 ```
+
+| 웹에서 보여줄 것 | 쓸 파일 |
+|---|---|
+| "34번 상행, 지금(학기 평일 8시) 혼잡" | `bus_hourly.csv` |
+| "원주의료원(상행) 정류장 8시 혼잡" | `pattern_base.csv` |
+| "34번 상행: 08~18시 혼잡 / 06시·22시 여유" | `time_windows.csv` |
+| "9시는 혼잡해요 → 6시에 타면 여유" | `recommendations.csv` |
+| 등급 범례 | `grade_thresholds.csv` |
 
 - 위치: `data/result/51130/2025/` (CSV, UTF-8 BOM). **git에 포함**되어 레포에서 바로 받을 수 있다 (`data/agg/`, `data/ref/`도 포함, `data/raw/`·`data/clean/`은 용량 때문에 제외).
 - 현재 커밋된 결과의 데이터 기간은 `grade_thresholds.csv`의 `date_min`~`date_max`로 확인한다.
@@ -406,11 +442,11 @@ erDiagram
 flowchart LR
     P1["① holidays<br/>✅ 2025"]:::done
     P2["② reference<br/>🔶 1~5월"]:::part
-    P3["③ collect<br/>🔶 1/1~5월 하순<br/>(약 7일 더)"]:::part
+    P3["③ collect<br/>🔶 1/1~5/31<br/>(약 7일 더)"]:::part
     P4["④ clean<br/>✅ 코드 / 부분 데이터"]:::done
     P5["⑤ aggregate<br/>✅ 코드"]:::done
-    P6["⑥ 1단계 pattern<br/>✅ 코드 / 임시 등급"]:::done
-    P7["2단계 예측<br/>⬜ 설계만"]:::todo
+    P6["⑥ pattern<br/>✅ 버스·정류장 등급<br/>혼잡·여유 구간 · 추천"]:::done
+    P7["등급 최종 기준<br/>⬜ 1년치 수집 후"]:::todo
     P1 --> P4
     P2 --> P4
     P3 --> P4 --> P5
